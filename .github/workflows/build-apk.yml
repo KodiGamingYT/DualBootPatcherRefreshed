@@ -173,7 +173,7 @@ jobs:
           python3 - << 'EOF'
           import os, re, glob
 
-          # 1. Ogranicz architektury tylko do arm64-v8a, odblokuj NDK r19c i wylacz Boot UI (nieuzywane na Note 8 / Android 10)
+          # 1. Ogranicz architektury do arm64-v8a, odblokuj NDK r19c i wylacz Boot UI
           for cmake_file in ["CMakeLists.txt", "android/CMakeLists.txt"]:
               if os.path.exists(cmake_file):
                   with open(cmake_file, "r", encoding="utf-8") as f:
@@ -195,7 +195,26 @@ jobs:
                   with open(cmake_file, "w", encoding="utf-8") as f:
                       f.write(content)
 
-          # 2. Dopisz sciezki find_package do cmake/android.toolchain.cmake aby CMake widzial built-android-arm64
+          # 2. Napraw duplikaty targetow LibArchive::LibArchive i LibLZMA::LibLZMA w CMake 3.31
+          for dep_file in glob.glob("cmake/dependencies/*.cmake"):
+              with open(dep_file, "r", encoding="utf-8") as f:
+                  dcontent = f.read()
+              # Zabezpiecz kazde add_library(... IMPORTED) warunkiem if(NOT TARGET ...)
+              dcontent = re.sub(
+                  r'(add_library\s*\(\s*([A-Za-z0-9_:.-]+)\s+[^)]*IMPORTED[^)]*\)(?:[\s\S]*?set_target_properties\s*\(\s*\2[\s\S]*?\))?)',
+                  r'if(NOT TARGET \2)\n\1\nendif()',
+                  dcontent
+              )
+              with open(dep_file, "w", encoding="utf-8") as f:
+                  f.write(dcontent)
+
+          # 3. Wyczysc zaleznosci Boot UI (android-system-core i freetype2), bo Boot UI jest wylaczony
+          for bootui_dep in ["cmake/dependencies/android-system-core.cmake", "cmake/dependencies/freetype2.cmake"]:
+              if os.path.exists(bootui_dep):
+                  with open(bootui_dep, "w", encoding="utf-8") as f:
+                      f.write("# Disabled (Boot UI off)\n")
+
+          # 4. Dopisz sciezki find_package do cmake/android.toolchain.cmake
           tc_file = "cmake/android.toolchain.cmake"
           with open(tc_file, "r", encoding="utf-8") as f:
               tc_content = f.read()
@@ -209,7 +228,7 @@ jobs:
           with open(tc_file, "w", encoding="utf-8") as f:
               f.write(tc_content)
 
-          # 3. Podmien thirdparty/CMakeLists.txt aby uzywal lokalnie skompilowanych bibliotek zamiast file(DOWNLOAD)
+          # 5. Podmien thirdparty/CMakeLists.txt aby uzywal lokalnie skompilowanych bibliotek
           tp_cmake = "thirdparty/CMakeLists.txt"
           new_tp = """
           cmake_minimum_required(VERSION 3.5)
@@ -232,7 +251,7 @@ jobs:
           with open(tp_cmake, "w", encoding="utf-8") as f:
               f.write(new_tp)
 
-          # 4. Zamien jcenter() na mavenCentral() i google() w plikach gradle
+          # 6. Zamien jcenter() na mavenCentral() i google() w plikach gradle
           for gfile in glob.glob("**/*.gradle", recursive=True):
               with open(gfile, "r", encoding="utf-8") as f:
                   gcontent = f.read()

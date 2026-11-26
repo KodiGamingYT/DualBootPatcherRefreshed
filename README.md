@@ -1,3 +1,7 @@
+
+[![Build DualBootPatcherRefreshed APK](https://github.com/KodiGamingYT/DualBootPatcherRefreshed/actions/workflows/build-apk.yml/badge.svg)](https://github.com/KodiGamingYT/DualBootPatcherRefreshed/actions/workflows/build-apk.yml)
+
+
 Due to recent changes in Android P, as well as upcoming changes in Android Q, DualBootPatcher is no longer being developed. These two releases change some fundamental assumptions that DBP makes about the host device.
 
 With devices that ship with Android 9.0+, the [system-as-root partition layout](https://source.android.com/devices/bootloader/system-as-root) is mandatory. This means that the system partition includes everything that traditionally went in the boot image's ramdisk. DBP relies on being able to modify the ramdisk to add its binaries as well as some config files that specify the ROM ID and device specific information (eg. partitions). To switch between ROMs, DBP simply flashes the ROM's patched boot image.

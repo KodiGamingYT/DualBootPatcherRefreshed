@@ -20,7 +20,7 @@ on:
 
 jobs:
   build:
-    name: Build Android APK (Auto-Patched)
+    name: Build Android APK (arm64-v8a)
     runs-on: ubuntu-22.04
 
     env:
@@ -120,7 +120,7 @@ jobs:
           export STRIP=$TOOLCHAIN/bin/${TARGET}-strip
 
           PREFIX_ANDROID=$GITHUB_WORKSPACE/thirdparty/built-android-arm64
-          mkdir -p $PREFIX_ANDROID
+          mkdir -p $PREFIX_ANDROID/include $PREFIX_ANDROID/lib
 
           cd $HOME/src-deps/zlib-1.3.1
           CHOST=$TARGET ./configure --prefix=$PREFIX_ANDROID --static
@@ -132,7 +132,6 @@ jobs:
 
           cd $HOME/src-deps/lz4-1.9.4
           make -j$(nproc) liblz4.a CC=$CC AR=$AR
-          mkdir -p $PREFIX_ANDROID/include $PREFIX_ANDROID/lib
           cp lib/lz4.h lib/lz4hc.h lib/lz4frame.h $PREFIX_ANDROID/include/
           cp lib/liblz4.a $PREFIX_ANDROID/lib/
 
@@ -169,12 +168,12 @@ jobs:
             --with-zlib --with-lzma --with-lz4 --with-expat --with-openssl --without-xml2 --without-bz2lib --without-zstd
           make -j$(nproc) && make install
 
-      - name: Auto-patch CMakeLists and Gradle in-memory
+      - name: Auto-patch CMakeLists, Toolchain and Gradle in-memory
         run: |
           python3 - << 'EOF'
           import os, re, glob
 
-          # 1. Ogranicz architektury tylko do arm64-v8a i odblokuj NDK r19c w CMakeLists.txt
+          # 1. Ogranicz architektury tylko do arm64-v8a, odblokuj NDK r19c i wylacz Boot UI (nieuzywane na Note 8 / Android 10)
           for cmake_file in ["CMakeLists.txt", "android/CMakeLists.txt"]:
               if os.path.exists(cmake_file):
                   with open(cmake_file, "r", encoding="utf-8") as f:
@@ -188,10 +187,29 @@ jobs:
                       'r18.1.5063045',
                       'r18.1.5063045 r19.2.5345600'
                   )
+                  content = re.sub(
+                      r'option\s*\(\s*MBP_ENABLE_BOOTUI\s+[^)]+ON\s*\)',
+                      'option(MBP_ENABLE_BOOTUI "Enable boot UI" OFF)',
+                      content
+                  )
                   with open(cmake_file, "w", encoding="utf-8") as f:
                       f.write(content)
 
-          # 2. Podmien thirdparty/CMakeLists.txt aby uzywal lokalnie skompilowanych bibliotek zamiast file(DOWNLOAD)
+          # 2. Dopisz sciezki find_package do cmake/android.toolchain.cmake aby CMake widzial built-android-arm64
+          tc_file = "cmake/android.toolchain.cmake"
+          with open(tc_file, "r", encoding="utf-8") as f:
+              tc_content = f.read()
+          tc_content += """
+          list(APPEND CMAKE_FIND_ROOT_PATH "${CMAKE_CURRENT_LIST_DIR}/../thirdparty/built-android-arm64")
+          list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_LIST_DIR}/../thirdparty/built-android-arm64")
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY BOTH)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE BOTH)
+          set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE BOTH)
+          """
+          with open(tc_file, "w", encoding="utf-8") as f:
+              f.write(tc_content)
+
+          # 3. Podmien thirdparty/CMakeLists.txt aby uzywal lokalnie skompilowanych bibliotek zamiast file(DOWNLOAD)
           tp_cmake = "thirdparty/CMakeLists.txt"
           new_tp = """
           cmake_minimum_required(VERSION 3.5)
@@ -214,7 +232,7 @@ jobs:
           with open(tp_cmake, "w", encoding="utf-8") as f:
               f.write(new_tp)
 
-          # 3. Zamien jcenter() na mavenCentral() i google() w plikach gradle
+          # 4. Zamien jcenter() na mavenCentral() i google() w plikach gradle
           for gfile in glob.glob("**/*.gradle", recursive=True):
               with open(gfile, "r", encoding="utf-8") as f:
                   gcontent = f.read()
@@ -232,6 +250,7 @@ jobs:
             -G Ninja \
             -DMBP_BUILD_TARGET=android \
             -DMBP_BUILD_TYPE=${BUILD_TYPE} \
+            -DMBP_ENABLE_BOOTUI=OFF \
             -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-21

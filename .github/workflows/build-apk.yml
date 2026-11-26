@@ -174,7 +174,7 @@ jobs:
           python3 - << 'EOF'
           import os, re, glob
 
-          # 1. Ogranicz architektury tylko do arm64-v8a w CMake
+          # 1. Ogranicz architektury tylko do arm64-v8a i odblokuj NDK r19c w CMakeLists.txt
           for cmake_file in ["CMakeLists.txt", "android/CMakeLists.txt"]:
               if os.path.exists(cmake_file):
                   with open(cmake_file, "r", encoding="utf-8") as f:
@@ -183,6 +183,10 @@ jobs:
                       r'set\s*\(\s*ANDROID_ABIS\s+[^)]+\)',
                       'set(ANDROID_ABIS arm64-v8a)',
                       content
+                  )
+                  content = content.replace(
+                      'r18.1.5063045',
+                      'r18.1.5063045 r19.2.5345600'
                   )
                   with open(cmake_file, "w", encoding="utf-8") as f:
                       f.write(content)

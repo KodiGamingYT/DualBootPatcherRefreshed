@@ -148,9 +148,10 @@ jobs:
           PATH=$TOOLCHAIN/bin:$PATH make install_dev
 
           cd $HOME/src-deps/libarchive-3.7.4
-          CPPFLAGS="-I$PREFIX_ANDROID/include" LDFLAGS="-L$PREFIX_ANDROID/lib" \
+          CPPFLAGS="-I$PREFIX_ANDROID/include -I$HOME/src-deps/libarchive-3.7.4/contrib/android/include" \
+          LDFLAGS="-L$PREFIX_ANDROID/lib" \
             ./configure --host=$TARGET --prefix=$PREFIX_ANDROID \
-            --enable-static --disable-shared --disable-bsdtar --disable-bsdcpio --disable-bsdcat \
+            --enable-static --disable-shared --disable-bsdtar --disable-bsdcpio --disable-bsdcat --disable-bsdunzip \
             --with-zlib --with-lzma --with-lz4 --with-expat --with-openssl --without-xml2 --without-bz2lib --without-zstd
           make -j$(nproc) && make install
 
@@ -180,7 +181,6 @@ jobs:
           print("=== Oryginalny thirdparty/CMakeLists.txt ===")
           print(tp_content)
 
-          # Wygeneruj nowy thirdparty/CMakeLists.txt mapujacy zbudowane paczki
           new_tp = """
           cmake_minimum_required(VERSION 3.5)
 

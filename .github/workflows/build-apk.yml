@@ -64,6 +64,7 @@ jobs:
             libexpat1-dev \
             libjansson-dev \
             libarchive-dev \
+            libyaml-cpp-dev \
             ccache
 
       - name: Setup Android SDK & NDK r19c
@@ -101,6 +102,7 @@ jobs:
           wget -q https://github.com/lz4/lz4/archive/refs/tags/v1.9.4.tar.gz -O lz4-1.9.4.tar.gz
           wget -q https://github.com/libexpat/libexpat/releases/download/R_2_6_2/expat-2.6.2.tar.gz
           wget -q https://github.com/akheron/jansson/releases/download/v2.14/jansson-2.14.tar.gz
+          wget -q https://github.com/jbeder/yaml-cpp/archive/refs/tags/yaml-cpp-0.7.0.tar.gz
           wget -q https://www.openssl.org/source/openssl-1.1.1w.tar.gz
           wget -q https://github.com/libarchive/libarchive/releases/download/v3.7.4/libarchive-3.7.4.tar.gz
 
@@ -142,6 +144,18 @@ jobs:
           ./configure --host=$TARGET --prefix=$PREFIX_ANDROID --enable-static --disable-shared
           make -j$(nproc) && make install
 
+          cd $HOME/src-deps/yaml-cpp-yaml-cpp-0.7.0
+          mkdir -p build && cd build
+          cmake .. -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-21 \
+            -DCMAKE_INSTALL_PREFIX=$PREFIX_ANDROID \
+            -DYAML_CPP_BUILD_TESTS=OFF \
+            -DYAML_CPP_BUILD_TOOLS=OFF \
+            -DYAML_BUILD_SHARED_LIBS=OFF
+          ninja -j$(nproc) && ninja install
+
           cd $HOME/src-deps/openssl-1.1.1w
           PATH=$TOOLCHAIN/bin:$PATH ./Configure android-arm64 -D__ANDROID_API__=$API no-shared no-tests --prefix=$PREFIX_ANDROID
           PATH=$TOOLCHAIN/bin:$PATH make -j$(nproc) build_libs
@@ -175,12 +189,6 @@ jobs:
 
           # 2. Podmien thirdparty/CMakeLists.txt aby uzywal lokalnie skompilowanych bibliotek zamiast file(DOWNLOAD)
           tp_cmake = "thirdparty/CMakeLists.txt"
-          with open(tp_cmake, "r", encoding="utf-8") as f:
-              tp_content = f.read()
-
-          print("=== Oryginalny thirdparty/CMakeLists.txt ===")
-          print(tp_content)
-
           new_tp = """
           cmake_minimum_required(VERSION 3.5)
 

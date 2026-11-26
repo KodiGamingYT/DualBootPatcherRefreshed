@@ -20,7 +20,7 @@ on:
 
 jobs:
   build:
-    name: Build Android APK
+    name: Build Android APK (Auto-Patched)
     runs-on: ubuntu-22.04
 
     env:
@@ -46,6 +46,10 @@ jobs:
             build-essential \
             cmake \
             ninja-build \
+            autoconf \
+            automake \
+            libtool \
+            pkg-config \
             python3 \
             python3-pip \
             unzip \
@@ -57,6 +61,9 @@ jobs:
             liblzma-dev \
             libbz2-dev \
             libzstd-dev \
+            libexpat1-dev \
+            libjansson-dev \
+            libarchive-dev \
             ccache
 
       - name: Setup Android SDK & NDK r19c
@@ -84,6 +91,127 @@ jobs:
           echo "ANDROID_NDK_HOME=$HOME/android-ndk-${ANDROID_NDK_VERSION}" >> $GITHUB_ENV
           echo "ANDROID_NDK=$HOME/android-ndk-${ANDROID_NDK_VERSION}" >> $GITHUB_ENV
 
+      - name: Build Thirdparty Libraries from Source (Android arm64-v8a)
+        run: |
+          mkdir -p $HOME/src-deps
+          cd $HOME/src-deps
+
+          wget -q https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+          wget -q https://github.com/tukaani-project/xz/releases/download/v5.4.6/xz-5.4.6.tar.gz
+          wget -q https://github.com/lz4/lz4/archive/refs/tags/v1.9.4.tar.gz -O lz4-1.9.4.tar.gz
+          wget -q https://github.com/libexpat/libexpat/releases/download/R_2_6_2/expat-2.6.2.tar.gz
+          wget -q https://github.com/akheron/jansson/releases/download/v2.14/jansson-2.14.tar.gz
+          wget -q https://www.openssl.org/source/openssl-1.1.1w.tar.gz
+          wget -q https://github.com/libarchive/libarchive/releases/download/v3.7.4/libarchive-3.7.4.tar.gz
+
+          for f in *.tar.gz; do tar -xzf "$f"; done
+
+          TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64
+          TARGET=aarch64-linux-android
+          API=21
+          export AR=$TOOLCHAIN/bin/${TARGET}-ar
+          export CC=$TOOLCHAIN/bin/${TARGET}${API}-clang
+          export AS=$CC
+          export CXX=$TOOLCHAIN/bin/${TARGET}${API}-clang++
+          export LD=$TOOLCHAIN/bin/${TARGET}-ld
+          export RANLIB=$TOOLCHAIN/bin/${TARGET}-ranlib
+          export STRIP=$TOOLCHAIN/bin/${TARGET}-strip
+
+          PREFIX_ANDROID=$GITHUB_WORKSPACE/thirdparty/built-android-arm64
+          mkdir -p $PREFIX_ANDROID
+
+          cd $HOME/src-deps/zlib-1.3.1
+          CHOST=$TARGET ./configure --prefix=$PREFIX_ANDROID --static
+          make -j$(nproc) && make install
+
+          cd $HOME/src-deps/xz-5.4.6
+          ./configure --host=$TARGET --prefix=$PREFIX_ANDROID --enable-static --disable-shared --disable-scripts --disable-doc
+          make -j$(nproc) && make install
+
+          cd $HOME/src-deps/lz4-1.9.4
+          make -j$(nproc) liblz4.a CC=$CC AR=$AR
+          mkdir -p $PREFIX_ANDROID/include $PREFIX_ANDROID/lib
+          cp lib/lz4.h lib/lz4hc.h lib/lz4frame.h $PREFIX_ANDROID/include/
+          cp lib/liblz4.a $PREFIX_ANDROID/lib/
+
+          cd $HOME/src-deps/expat-2.6.2
+          ./configure --host=$TARGET --prefix=$PREFIX_ANDROID --enable-static --disable-shared --without-docbook
+          make -j$(nproc) && make install
+
+          cd $HOME/src-deps/jansson-2.14
+          ./configure --host=$TARGET --prefix=$PREFIX_ANDROID --enable-static --disable-shared
+          make -j$(nproc) && make install
+
+          cd $HOME/src-deps/openssl-1.1.1w
+          PATH=$TOOLCHAIN/bin:$PATH ./Configure android-arm64 -D__ANDROID_API__=$API no-shared no-tests --prefix=$PREFIX_ANDROID
+          PATH=$TOOLCHAIN/bin:$PATH make -j$(nproc) build_libs
+          PATH=$TOOLCHAIN/bin:$PATH make install_dev
+
+          cd $HOME/src-deps/libarchive-3.7.4
+          CPPFLAGS="-I$PREFIX_ANDROID/include" LDFLAGS="-L$PREFIX_ANDROID/lib" \
+            ./configure --host=$TARGET --prefix=$PREFIX_ANDROID \
+            --enable-static --disable-shared --disable-bsdtar --disable-bsdcpio --disable-bsdcat \
+            --with-zlib --with-lzma --with-lz4 --with-expat --with-openssl --without-xml2 --without-bz2lib --without-zstd
+          make -j$(nproc) && make install
+
+      - name: Auto-patch CMakeLists and Gradle in-memory
+        run: |
+          python3 - << 'EOF'
+          import os, re, glob
+
+          # 1. Ogranicz architektury tylko do arm64-v8a w CMake
+          for cmake_file in ["CMakeLists.txt", "android/CMakeLists.txt"]:
+              if os.path.exists(cmake_file):
+                  with open(cmake_file, "r", encoding="utf-8") as f:
+                      content = f.read()
+                  content = re.sub(
+                      r'set\s*\(\s*ANDROID_ABIS\s+[^)]+\)',
+                      'set(ANDROID_ABIS arm64-v8a)',
+                      content
+                  )
+                  with open(cmake_file, "w", encoding="utf-8") as f:
+                      f.write(content)
+
+          # 2. Podmien thirdparty/CMakeLists.txt aby uzywal lokalnie skompilowanych bibliotek zamiast file(DOWNLOAD)
+          tp_cmake = "thirdparty/CMakeLists.txt"
+          with open(tp_cmake, "r", encoding="utf-8") as f:
+              tp_content = f.read()
+
+          print("=== Oryginalny thirdparty/CMakeLists.txt ===")
+          print(tp_content)
+
+          # Wygeneruj nowy thirdparty/CMakeLists.txt mapujacy zbudowane paczki
+          new_tp = """
+          cmake_minimum_required(VERSION 3.5)
+
+          set(HOST_PREFIX "/usr")
+          set(ANDROID_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/built-android-arm64")
+
+          if(MBP_BUILD_TARGET STREQUAL "hosttools")
+              set(ACTIVE_PREFIX "${HOST_PREFIX}")
+          else()
+              set(ACTIVE_PREFIX "${ANDROID_PREFIX}")
+          endif()
+
+          set(MBP_PREBUILTS_INC_DIR "${ACTIVE_PREFIX}/include" CACHE INTERNAL "")
+          set(MBP_PREBUILTS_LIB_DIR "${ACTIVE_PREFIX}/lib" CACHE INTERNAL "")
+
+          include_directories(SYSTEM "${ACTIVE_PREFIX}/include")
+          link_directories("${ACTIVE_PREFIX}/lib")
+          """
+          with open(tp_cmake, "w", encoding="utf-8") as f:
+              f.write(new_tp)
+
+          # 3. Zamien jcenter() na mavenCentral() i google() w plikach gradle
+          for gfile in glob.glob("**/*.gradle", recursive=True):
+              with open(gfile, "r", encoding="utf-8") as f:
+                  gcontent = f.read()
+              if "jcenter()" in gcontent:
+                  gcontent = gcontent.replace("jcenter()", "mavenCentral()\n        google()")
+                  with open(gfile, "w", encoding="utf-8") as f:
+                      f.write(gcontent)
+          EOF
+
       - name: Configure CMake
         run: |
           mkdir -p build
@@ -92,7 +220,7 @@ jobs:
             -G Ninja \
             -DMBP_BUILD_TARGET=android \
             -DMBP_BUILD_TYPE=${BUILD_TYPE} \
-            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-21
 
